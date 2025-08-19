@@ -1,0 +1,39 @@
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import streamlit as st
+
+# F&O Stock List (shortened here, but we can load full 200+ list)
+fno_stocks = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS"]
+
+def WMA(series, length):
+    weights = np.arange(1, length+1)
+    return series.rolling(length).apply(lambda prices: np.dot(prices, weights)/weights.sum(), raw=True)
+
+def get_signal(ticker):
+    df = yf.download(ticker, period="3mo", interval="1d", progress=False)
+    if df.empty: 
+        return None
+
+    df['SMA'] = df['Close'].rolling(20).mean()
+    df['STD'] = df['Close'].rolling(20).std()
+    df['Upper'] = df['SMA'] + 2 * df['STD']
+    df['Lower'] = df['SMA'] - 2 * df['STD']
+    df['%B'] = (df['Close'] - df['Lower']) / (df['Upper'] - df['Lower'])
+    df['WMA5'] = WMA(df['%B'], 5)
+    df['WMA6'] = WMA(df['WMA5'], 6)
+    df['Signal'] = df['WMA6'].ewm(span=5, adjust=False).mean()
+
+    df['Buy'] = (df['WMA6'] > df['Signal']) & (df['WMA6'].shift(1) <= df['Signal'].shift(1))
+    df['Sell'] = (df['WMA6'] < df['Signal']) & (df['WMA6'].shift(1) >= df['Signal'].shift(1))
+
+    latest = df.iloc[-1]
+    signal = "BUY" if latest['Buy'] else ("SELL" if latest['Sell'] else "HOLD")
+
+    return [ticker, round(latest['Close'],2), round(latest['%B'],2), signal]
+
+# Streamlit UI
+st.title("📈 F&O Screener (%B Crossover Strategy)")
+data = [get_signal(t) for t in fno_stocks]
+df = pd.DataFrame([d for d in data if d], columns=["Ticker","Close","%B","Signal"])
+st.dataframe(df, use_container_width=True)
